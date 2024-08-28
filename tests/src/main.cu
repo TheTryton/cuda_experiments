@@ -490,7 +490,7 @@ void checkGraphPerformance(uint32_t countElements, cudaStream_t stream)
     {
         for(int ikrnl=0; ikrnl<kernelInvocations; ikrnl++)
         {
-            shortKernel<<<gridDim, blockDim, 0, stream>>>(outDevice, inDevice);
+            shortKernel<<<gridDim, blockDim, 0, stream>>>(outDevice, inDevice, countElements);
         }
         cudaAssert(cudaStreamSynchronize(stream));
     }
@@ -507,7 +507,7 @@ void checkGraphPerformance(uint32_t countElements, cudaStream_t stream)
     cudaGraphExec_t graphInstance;
     cudaAssert(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
     for(int ikrnl=0; ikrnl<kernelInvocations; ikrnl++){
-        shortKernel<<<gridDim, blockDim, 0, stream>>>(outDevice, inDevice);
+        shortKernel<<<gridDim, blockDim, 0, stream>>>(outDevice, inDevice, countElements);
     }
     cudaAssert(cudaStreamEndCapture(stream, &graph));
     cudaAssert(cudaGraphInstantiate(&graphInstance, graph, nullptr, nullptr, 0));
@@ -535,7 +535,7 @@ int main(int argc, const char* argv[])
     constexpr color_space colorSpace = color_space::rec2020;
     constexpr bool fullRange = true;
     constexpr bool preserveRangeOvershoot = true;
-    constexpr uint32_t countElements = 65536;
+    //constexpr uint32_t countElements = 65536;
 
     cudaStream_t stream;
     cudaAssert(cudaStreamCreate(&stream));
