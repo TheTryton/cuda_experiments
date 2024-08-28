@@ -1,0 +1,160 @@
+#pragma once
+
+#include <conversions.cuh>
+#include <yuv.cuh>
+
+constexpr uint32_t yuv444pBlockSize = 2;
+constexpr uint32_t yuv422pBlockSize = 2;
+constexpr uint32_t yuv420pBlockSize = 2;
+using yuv8bit_t = uint8_t;
+constexpr size_t yuv8bit_bits = 8;
+
+__global__ void kernel_yuv444p_output_single_pass(
+    cudaTextureObject_t src,
+    uint8_t * destY,
+    uint8_t * destU,
+    uint8_t * destV,
+    size_t pitchY,
+    size_t pitchU,
+    size_t pitchV,
+    uint32_t width, uint32_t height,
+    color_space colorSpace, bool fullRange, bool preserveRangeOvershoot)
+{
+    uint32_t x = blockDim.x * blockIdx.x + threadIdx.x;
+    uint32_t y = blockDim.y * blockIdx.y + threadIdx.y;
+
+    x *= yuv444pBlockSize;
+
+    if (x >= width || y >= height)
+        return;
+
+    alignas(max_align_t) yuv8bit_t storeY[yuv444pBlockSize];
+    alignas(max_align_t) yuv8bit_t storeU[yuv444pBlockSize];
+    alignas(max_align_t) yuv8bit_t storeV[yuv444pBlockSize];
+    #pragma unroll
+    for (int i = 0; i < yuv444pBlockSize; i++)
+    {
+        const auto rgba = unpremultiply(tex2D<float4>(src, x + i, y));
+        const auto yuv = YUVfromRGB<false>(float3{rgba.x, rgba.y, rgba.z}, colorSpace);
+
+        storeY[i] = fromYUVFloat<yuv8bit_bits, false>(yuv.x, fullRange, preserveRangeOvershoot);
+        storeU[i] = fromYUVFloat<yuv8bit_bits, true>(yuv.y, fullRange, preserveRangeOvershoot);
+        storeV[i] = fromYUVFloat<yuv8bit_bits, true>(yuv.z, fullRange, preserveRangeOvershoot);
+    }
+
+    auto offsetY = y * pitchY + x * sizeof(yuv8bit_t);
+    auto offsetU = y * pitchU + x * sizeof(yuv8bit_t);
+    auto offsetV = y * pitchV + x * sizeof(yuv8bit_t);
+
+    memcpyEfficient<yuv444pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
+    memcpyEfficient<yuv444pBlockSize * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
+    memcpyEfficient<yuv444pBlockSize * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
+}
+
+__global__ void kernel_yuv422p_output_single_pass(
+    cudaTextureObject_t src,
+    uint8_t * destY,
+    uint8_t * destU,
+    uint8_t * destV,
+    size_t pitchY,
+    size_t pitchU,
+    size_t pitchV,
+    uint32_t width, uint32_t height,
+    color_space colorSpace, bool fullRange, bool preserveRangeOvershoot)
+{
+    uint32_t x = blockDim.x * blockIdx.x + threadIdx.x;
+    uint32_t y = blockDim.y * blockIdx.y + threadIdx.y;
+
+    x *= yuv422pBlockSize;
+
+    if (x >= width || y >= height)
+        return;
+
+    alignas(max_align_t) yuv8bit_t storeY[yuv422pBlockSize];
+    alignas(max_align_t) yuv8bit_t storeU[yuv422pBlockSize / 2];
+    alignas(max_align_t) yuv8bit_t storeV[yuv422pBlockSize / 2];
+    #pragma unroll
+    for(int i = 0; i < yuv422pBlockSize; i += 2)
+    {
+        const auto rgba0 = unpremultiply(tex2D<float4>(src, x + 2 * i + 0, y));
+        const auto rgba1 = unpremultiply(tex2D<float4>(src, x + 2 * i + 1, y));
+        const auto yuv0 = YUVfromRGB<false>(float3{rgba0.x, rgba0.y, rgba0.z}, colorSpace);
+        const auto yuv1 = YUVfromRGB<true>(float3{rgba1.x, rgba1.y, rgba1.z}, colorSpace);
+
+        storeY[2 * i + 0] = fromYUVFloat<yuv8bit_bits, false>(yuv0.x, fullRange, preserveRangeOvershoot);
+        storeY[2 * i + 1] = fromYUVFloat<yuv8bit_bits, false>(yuv1, fullRange, preserveRangeOvershoot);
+        storeU[i] = fromYUVFloat<yuv8bit_bits, true>(yuv0.y, fullRange, preserveRangeOvershoot);
+        storeV[i] = fromYUVFloat<yuv8bit_bits, true>(yuv0.z, fullRange, preserveRangeOvershoot);
+    }
+
+    auto offsetY = y * pitchY + x * sizeof(yuv8bit_t);
+    auto offsetU = y * pitchU + x / 2 * sizeof(yuv8bit_t);
+    auto offsetV = y * pitchV + x / 2 * sizeof(yuv8bit_t);
+
+    memcpyEfficient<yuv422pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
+    memcpyEfficient<yuv422pBlockSize / 2 * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
+    memcpyEfficient<yuv422pBlockSize / 2 * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
+}
+
+__global__ void kernel_yuv420p_output_single_pass(
+    cudaTextureObject_t src,
+    uint8_t * destY,
+    uint8_t * destU,
+    uint8_t * destV,
+    size_t pitchY,
+    size_t pitchU,
+    size_t pitchV,
+    uint32_t width, uint32_t height,
+    color_space colorSpace, bool fullRange, bool preserveRangeOvershoot)
+{
+    uint32_t x = blockDim.x * blockIdx.x + threadIdx.x;
+    uint32_t y = blockDim.y * blockIdx.y + threadIdx.y;
+
+    x *= yuv420pBlockSize;
+
+    if(x >= width || y >= height)
+        return;
+
+    if(y % 2 == 0)
+    {
+        alignas(max_align_t) yuv8bit_t storeY[yuv420pBlockSize];
+        alignas(max_align_t) yuv8bit_t storeU[yuv420pBlockSize / 2];
+        alignas(max_align_t) yuv8bit_t storeV[yuv420pBlockSize / 2];
+        #pragma unroll
+        for(int i = 0; i < yuv420pBlockSize; i += 2)
+        {
+            const auto rgba0 = unpremultiply(tex2D<float4>(src, x + 2 * i + 0, y));
+            const auto rgba1 = unpremultiply(tex2D<float4>(src, x + 2 * i + 1, y));
+            const auto yuv0 = YUVfromRGB<false>(float3{rgba0.x, rgba0.y, rgba0.z}, colorSpace);
+            const auto yuv1 = YUVfromRGB<true>(float3{rgba1.x, rgba1.y, rgba1.z}, colorSpace);
+
+            storeY[2 * i + 0] = fromYUVFloat<yuv8bit_bits, false>(yuv0.x, fullRange, preserveRangeOvershoot);
+            storeY[2 * i + 1] = fromYUVFloat<yuv8bit_bits, false>(yuv1, fullRange, preserveRangeOvershoot);
+            storeU[i] = fromYUVFloat<yuv8bit_bits, true>(yuv0.y, fullRange, preserveRangeOvershoot);
+            storeV[i] = fromYUVFloat<yuv8bit_bits, true>(yuv0.z, fullRange, preserveRangeOvershoot);
+        }
+
+        auto offsetY = y * pitchY + x * sizeof(yuv8bit_t);
+        auto offsetU = (y / 2) * pitchU + x / 2 * sizeof(yuv8bit_t);
+        auto offsetV = (y / 2) * pitchV + x / 2 * sizeof(yuv8bit_t);
+
+        memcpyEfficient<yuv420pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
+        memcpyEfficient<yuv420pBlockSize / 2 * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
+        memcpyEfficient<yuv420pBlockSize / 2 * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
+    }
+    else
+    {
+        alignas(max_align_t) yuv8bit_t storeY[yuv420pBlockSize];
+        #pragma unroll
+        for(int i = 0; i < yuv420pBlockSize; i++)
+        {
+            const auto rgba = unpremultiply(tex2D<float4>(src, x + i, y));
+            const auto yuv = YUVfromRGB<true>(float3{rgba.x, rgba.y, rgba.z}, colorSpace);
+            storeY[i] = fromYUVFloat<yuv8bit_bits, false>(yuv, fullRange, preserveRangeOvershoot);
+        }
+
+        auto offsetY = y * pitchY + x * sizeof(yuv8bit_t);
+
+        memcpyEfficient<yuv420pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
+    }
+}
