@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.27)
+cmake_minimum_required(VERSION 3.30)
 project(tetrahedral_interpolation LANGUAGES CXX)
 
 set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -6,7 +6,9 @@ include(common)
 
 add_subdirectory(core)
 add_subdirectory(cuda)
-add_subdirectory(tests)
+add_subdirectory(tests/cuda_tests)
+add_subdirectory(tests/cupti_tests)
+add_subdirectory(tests/ram_gpuram_tests)
 
 find_package(Stb REQUIRED)
 

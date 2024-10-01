@@ -1,18 +1,25 @@
-cmake_minimum_required(VERSION 3.27)
+cmake_minimum_required(VERSION 3.30)
 project(cuda_tests LANGUAGES CXX CUDA)
+
+find_package(CUDAToolkit REQUIRED)
 
 enable_language(CUDA)
 
 set(cuda_tests_sources
-    src/main.cu
+        "src/main.cu"
 )
 
 add_executable(cuda_tests
         ${cuda_tests_sources}
 )
 target_include_directories(cuda_tests PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "include"
+        "src"
+)
+target_link_libraries(cuda_tests PRIVATE
+        CUDA::cudart
+        #CUDA::cuda_driver
+        #CUDA::cupti
 )
 target_compile_options(cuda_tests PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
         -lineinfo

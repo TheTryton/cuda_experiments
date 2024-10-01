@@ -46,9 +46,9 @@ __global__ void kernel_yuv444p_output_single_pass(
     auto offsetU = y * pitchU + x * sizeof(yuv8bit_t);
     auto offsetV = y * pitchV + x * sizeof(yuv8bit_t);
 
-    memcpyEfficient<yuv444pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
-    memcpyEfficient<yuv444pBlockSize * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
-    memcpyEfficient<yuv444pBlockSize * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
+    memcpy<yuv444pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
+    memcpy<yuv444pBlockSize * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
+    memcpy<yuv444pBlockSize * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
 }
 
 __global__ void kernel_yuv422p_output_single_pass(
@@ -91,9 +91,9 @@ __global__ void kernel_yuv422p_output_single_pass(
     auto offsetU = y * pitchU + x / 2 * sizeof(yuv8bit_t);
     auto offsetV = y * pitchV + x / 2 * sizeof(yuv8bit_t);
 
-    memcpyEfficient<yuv422pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
-    memcpyEfficient<yuv422pBlockSize / 2 * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
-    memcpyEfficient<yuv422pBlockSize / 2 * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
+    memcpy<yuv422pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
+    memcpy<yuv422pBlockSize / 2 * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
+    memcpy<yuv422pBlockSize / 2 * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
 }
 
 __global__ void kernel_yuv420p_output_single_pass(
@@ -138,9 +138,9 @@ __global__ void kernel_yuv420p_output_single_pass(
         auto offsetU = (y / 2) * pitchU + x / 2 * sizeof(yuv8bit_t);
         auto offsetV = (y / 2) * pitchV + x / 2 * sizeof(yuv8bit_t);
 
-        memcpyEfficient<yuv420pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
-        memcpyEfficient<yuv420pBlockSize / 2 * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
-        memcpyEfficient<yuv420pBlockSize / 2 * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
+        memcpy<yuv420pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
+        memcpy<yuv420pBlockSize / 2 * sizeof(yuv8bit_t)>(destU + offsetU, storeU);
+        memcpy<yuv420pBlockSize / 2 * sizeof(yuv8bit_t)>(destV + offsetV, storeV);
     }
     else
     {
@@ -155,6 +155,6 @@ __global__ void kernel_yuv420p_output_single_pass(
 
         auto offsetY = y * pitchY + x * sizeof(yuv8bit_t);
 
-        memcpyEfficient<yuv420pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
+        memcpy<yuv420pBlockSize * sizeof(yuv8bit_t)>(destY + offsetY, storeY);
     }
 }

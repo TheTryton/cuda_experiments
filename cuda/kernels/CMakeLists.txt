@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.27)
+cmake_minimum_required(VERSION 3.30)
 project(tetrahedral_interpolation_cuda_kernels LANGUAGES CXX CUDA)
 
 enable_language(CUDA)

@@ -1,0 +1,3 @@
+[submodule "tests/blas/third_party/libsimdpp"]
+	path = tests/blas/third_party/libsimdpp
+	url = https://github.com/p12tic/libsimdpp.git

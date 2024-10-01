@@ -1,12 +1,26 @@
 #include <8bit.cuh>
 #include <10bit.cuh>
 #include <16bit.cuh>
+#include <uyvy.cuh>
 
 #include <iostream>
 #include <limits>
 #include <algorithm>
 #include <random>
 #include <tuple>
+#include <map>
+#include <unordered_map>
+
+#include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+
+#include <cuda.h>
+
+/*#include <cupti.h>
+#include <cupti_profiler_target.h>
+#include <cupti_sass_metrics.h>
+#include <cupti_target.h>*/
 
 void yuv444p(cudaTextureObject_t rgbaTexture, uint32_t width, uint32_t height,
              color_space colorSpace, bool fullRange, bool preserveRangeOvershoot, cudaStream_t stream)
@@ -296,6 +310,63 @@ void yuv420p16le(cudaTextureObject_t rgbaTexture, uint32_t width, uint32_t heigh
     cudaAssert(cudaFree(yuv420P16LEPlaneDeviceData[2]));
 };
 
+void uyvy10be(cudaTextureObject_t rgbaTexture, uint32_t width, uint32_t height,
+              color_space colorSpace, bool fullRange, bool preserveRangeOvershoot, cudaStream_t stream)
+{
+    uint8_t* uyvy10BEPlaneDeviceData;
+    size_t uyvy10BEPlaneDeviceDataPitch;
+    cudaAssert(cudaMallocPitch(&uyvy10BEPlaneDeviceData, &uyvy10BEPlaneDeviceDataPitch, width / 2 * 5, height));
+
+    dim3 blockSizeUYVY10BE = {
+        32, 32, 1
+    };
+    dim3 gridSizeUYVY10BE = {
+        (width/uyvy10beBlockSize + blockSizeUYVY10BE.x - 1) / blockSizeUYVY10BE.x,
+        (height + blockSizeUYVY10BE.y - 1) / blockSizeUYVY10BE.y,
+        1
+    };
+    kernel_uyvy10be_output_single_pass<<<gridSizeUYVY10BE, blockSizeUYVY10BE, 0, stream>>>(
+        rgbaTexture,
+        uyvy10BEPlaneDeviceData,
+        uyvy10BEPlaneDeviceDataPitch,
+        width, height,
+        colorSpace, fullRange, preserveRangeOvershoot
+    );
+
+    cudaAssert(cudaStreamSynchronize(stream));
+
+    cudaAssert(cudaFree(uyvy10BEPlaneDeviceData));
+}
+
+void uyvy10be_shared(cudaTextureObject_t rgbaTexture, uint32_t width, uint32_t height,
+              color_space colorSpace, bool fullRange, bool preserveRangeOvershoot, cudaStream_t stream)
+{
+    uint8_t* uyvy10BEPlaneDeviceData;
+    size_t uyvy10BEPlaneDeviceDataPitch;
+    cudaAssert(cudaMallocPitch(&uyvy10BEPlaneDeviceData, &uyvy10BEPlaneDeviceDataPitch, width / 2 * 5, height));
+
+    dim3 blockSizeUYVY10BE = {
+        32, 32, 1
+    };
+    dim3 gridSizeUYVY10BE = {
+        (width/uyvy10beBlockSize + blockSizeUYVY10BE.x - 1) / blockSizeUYVY10BE.x,
+        (height + blockSizeUYVY10BE.y - 1) / blockSizeUYVY10BE.y,
+        1
+    };
+    size_t sharedMemorySize = calculateRequiredSharedMemoryUYVY10BE(blockSizeUYVY10BE);
+    kernel_uyvy10be_output_single_pass_shared<<<gridSizeUYVY10BE, blockSizeUYVY10BE, sharedMemorySize, stream>>>(
+        rgbaTexture,
+        uyvy10BEPlaneDeviceData,
+        uyvy10BEPlaneDeviceDataPitch,
+        width, height,
+        colorSpace, fullRange, preserveRangeOvershoot
+    );
+
+    cudaAssert(cudaStreamSynchronize(stream));
+
+    cudaAssert(cudaFree(uyvy10BEPlaneDeviceData));
+}
+
 std::tuple<uint8_t*, cudaTextureObject_t> createR8G8B8A8Image(uint32_t width, uint32_t height)
 {
     using imagePixelType_t = uchar4;
@@ -408,19 +479,19 @@ std::tuple<uint8_t*, cudaTextureObject_t> createR16G16B16A16Image(uint32_t width
 
 std::tuple<uint8_t*, cudaTextureObject_t> createR32G32B32A32Image(uint32_t width, uint32_t height)
 {
-    using imagePixelType_t = uint4;
+    using imagePixelType_t = float4;
     const size_t rgbaImageDataSize = width * height * sizeof(imagePixelType_t);
     imagePixelType_t * rgbaHostImageData;
     cudaAssert(cudaMallocHost(&rgbaHostImageData, rgbaImageDataSize));
     std::generate_n(rgbaHostImageData, width * height, [](){
         static std::random_device rd;
         static std::mt19937 generator(rd());
-        static std::uniform_int_distribution<uint32_t> distribution(0, std::numeric_limits<uint32_t>::max());
+        static std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
         return imagePixelType_t{
-            static_cast<uint32_t>(distribution(generator)),
-            static_cast<uint32_t>(distribution(generator)),
-            static_cast<uint32_t>(distribution(generator)),
-            static_cast<uint32_t>(distribution(generator))
+            distribution(generator),
+            distribution(generator),
+            distribution(generator),
+            distribution(generator)
         };
     });
 
@@ -440,7 +511,7 @@ std::tuple<uint8_t*, cudaTextureObject_t> createR32G32B32A32Image(uint32_t width
     resourceDesc.res.pitch2D.desc = cudaCreateChannelDesc<imagePixelType_t>();
 
     cudaTextureDesc textureDesc{};
-    textureDesc.readMode = cudaTextureReadMode::cudaReadModeNormalizedFloat;
+    textureDesc.readMode = cudaTextureReadMode::cudaReadModeElementType;
     textureDesc.normalizedCoords = false;
     textureDesc.filterMode = cudaTextureFilterMode::cudaFilterModePoint;
     textureDesc.addressMode[0] = cudaTextureAddressMode::cudaAddressModeClamp;
@@ -460,7 +531,7 @@ std::tuple<uint8_t*, cudaTextureObject_t> createR32G32B32A32Image(uint32_t width
 
     return std::make_tuple(rgbaDeviceImageData, rgbaTexture);
 }
-
+/*
 __global__ void shortKernel(float * outDevice, float * inDevice, size_t countElements){
     int idx=blockIdx.x*blockDim.x+threadIdx.x;
     if(idx<countElements) outDevice[idx]=1.23*inDevice[idx];
@@ -527,26 +598,42 @@ void checkGraphPerformance(uint32_t countElements, cudaStream_t stream)
     cudaAssert(cudaEventDestroy(stop));
     cudaAssert(cudaEventDestroy(start));
 }
-
-int main(int argc, const char* argv[])
+*/
+/*
+void cuptiAssert(CUptiResult error)
 {
-    constexpr uint32_t width = 3840 * 4;
-    constexpr uint32_t height = 2160  * 4;
-    constexpr color_space colorSpace = color_space::rec2020;
-    constexpr bool fullRange = true;
-    constexpr bool preserveRangeOvershoot = true;
-    //constexpr uint32_t countElements = 65536;
+    if(error != CUPTI_SUCCESS)
+    {
+        assert(error == CUPTI_SUCCESS);
+    }
+}
 
+void cuAssert(CUresult error)
+{
+    if(error != CUDA_SUCCESS)
+    {
+        assert(error == CUDA_SUCCESS);
+    }
+}
+*/
+void runTests(uint32_t width, uint32_t height, color_space colorSpace, bool fullRange, bool preserveRangeOvershoot, bool profile)
+{
     cudaStream_t stream;
-    cudaAssert(cudaStreamCreate(&stream));
+    if(profile)
+    {
+        stream = 0;
+    }
+    else
+    {
+        cudaAssert(cudaStreamCreate(&stream));
+    }
 
-    // checkGraphPerformance(countElements, stream);
 
     // R8G8B8A8
     {
         auto [r8g8b8a8DeviceImageData, r8g8b8a8Texture] = createR8G8B8A8Image(width, height);
 
-        yuv444p(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        /*yuv444p(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv422p(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv420p(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
 
@@ -556,7 +643,10 @@ int main(int argc, const char* argv[])
 
         yuv444p16le(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv422p16le(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
-        yuv420p16le(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        yuv420p16le(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);*/
+
+        uyvy10be(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        uyvy10be_shared(r8g8b8a8Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
 
         cudaAssert(cudaDestroyTextureObject(r8g8b8a8Texture));
         cudaAssert(cudaFree(r8g8b8a8DeviceImageData));
@@ -564,9 +654,9 @@ int main(int argc, const char* argv[])
 
     // R16G16B16A16
     {
-        auto [r16g16b16a16DeviceImageData, r16g16b16a16Texture] = createR8G8B8A8Image(width, height);
+        auto [r16g16b16a16DeviceImageData, r16g16b16a16Texture] = createR16G16B16A16Image(width, height);
 
-        yuv444p(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        /*yuv444p(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv422p(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv420p(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
 
@@ -576,7 +666,10 @@ int main(int argc, const char* argv[])
 
         yuv444p16le(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv422p16le(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
-        yuv420p16le(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        yuv420p16le(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);*/
+
+        uyvy10be(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        uyvy10be_shared(r16g16b16a16Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
 
         cudaAssert(cudaDestroyTextureObject(r16g16b16a16Texture));
         cudaAssert(cudaFree(r16g16b16a16DeviceImageData));
@@ -584,9 +677,9 @@ int main(int argc, const char* argv[])
 
     // R32G32B32A32
     {
-        auto [r32g32b32a32DeviceImageData, r32g32b32a32Texture] = createR8G8B8A8Image(width, height);
+        auto [r32g32b32a32DeviceImageData, r32g32b32a32Texture] = createR32G32B32A32Image(width, height);
 
-        yuv444p(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        /*yuv444p(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv422p(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv420p(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
 
@@ -596,14 +689,213 @@ int main(int argc, const char* argv[])
 
         yuv444p16le(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
         yuv422p16le(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
-        yuv420p16le(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        yuv420p16le(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);*/
+
+        uyvy10be(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
+        uyvy10be_shared(r32g32b32a32Texture, width, height, colorSpace, fullRange, preserveRangeOvershoot, stream);
 
         cudaAssert(cudaDestroyTextureObject(r32g32b32a32Texture));
         cudaAssert(cudaFree(r32g32b32a32DeviceImageData));
     }
 
-    cudaAssert(cudaStreamSynchronize(stream));
-    cudaAssert(cudaStreamDestroy(stream));
+    if(!profile)
+    {
+        cudaAssert(cudaStreamSynchronize(stream));
+        cudaAssert(cudaStreamDestroy(stream));
+    }
+}
+/*
+void printSassData(CUpti_SassMetricsFlushData_Params* pParams, const std::map<uint64_t, std::string>& metricIdToNameMap)
+{
+    using InstanceToMetricVal        = std::unordered_map<uint32_t, uint64_t>;                    // Key -> InstanceID
+    using PcOffsetToInstanceTable    = std::map<uint32_t, InstanceToMetricVal>;                   // Key -> pcOffset
+    using MetricToPcOffsetTable      = std::unordered_map<uint64_t, PcOffsetToInstanceTable>;     // Key -> metricId
+    using FunctionToMetricTable      = std::unordered_map<std::string, MetricToPcOffsetTable>;    // Key -> function Name
+    using ModuleToFunctionTable      = std::unordered_map<uint32_t, FunctionToMetricTable>;       // key -> module cubinCrc
+
+    CUpti_SassMetrics_Data* pSassMetricData = pParams->pMetricsData;
+    ModuleToFunctionTable moduleToFunctionTable;
+    for (auto pcRecordIndex = 0; pcRecordIndex < pParams->numOfPatchedInstructionRecords; ++pcRecordIndex)
+    {
+        CUpti_SassMetrics_Data sassMetricData = pSassMetricData[pcRecordIndex];
+
+        uint32_t cubinCrc = sassMetricData.cubinCrc;
+        FunctionToMetricTable& functionToMetricTable = moduleToFunctionTable[cubinCrc];
+
+        std::string functionName = sassMetricData.functionName;
+        MetricToPcOffsetTable& metricToPcOffsetTable = functionToMetricTable[functionName];
+
+        for (auto instanceIndex = 0; instanceIndex < pParams->numOfInstances; ++instanceIndex)
+        {
+            auto& metricValue = sassMetricData.pInstanceValues[instanceIndex];
+
+            uint64_t metricId = metricValue.metricId;
+            PcOffsetToInstanceTable& pcOffsetToInstanceTable = metricToPcOffsetTable[metricId];
+
+            uint32_t pcOffset = sassMetricData.pcOffset;
+            InstanceToMetricVal& instanceToMetricVal = pcOffsetToInstanceTable[pcOffset];
+
+            instanceToMetricVal[instanceIndex] = metricValue.value;
+        }
+    }
+
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+
+    if (!SymInitialize(GetCurrentProcess(), NULL, TRUE))
+    {
+        std::cerr << "SymInitialize returned error: " << GetLastError() << std::endl;
+        return;
+    }
+
+    for (const auto& module : moduleToFunctionTable)
+    {
+        printf("\nModule cubinCrc: %u\n", module.first);
+        for (const auto& function : module.second)
+        {
+            char kernelName[1024] = {'\0'};
+            UnDecorateSymbolName(function.first.c_str(), kernelName, 1024, UNDNAME_COMPLETE);
+            printf("Kernel Name: %s\n", kernelName);
+            for (const auto& metric : function.second)
+            {
+                printf("metric Name: %s\n", metricIdToNameMap.at(metric.first).c_str());
+                for (const auto& pcOffset : metric.second)
+                {
+                    std::cout << "\t\t" << "[Inst] pcOffset: " << std::hex << "0x" << pcOffset.first;
+                    std::cout << std::dec << "\tmetricValue: \t";
+
+                    InstanceToMetricVal instanceToMetricVal = pcOffset.second;
+                    for (const auto& instance : instanceToMetricVal)
+                    {
+                        std::cout << "[" << instance.first << "]: " << instance.second << "\t";
+                    }
+                    std::cout << "\n";
+                }
+                std::cout << "\n";
+            }
+        }
+    }
+}
+*/
+int main(int argc, const char* argv[])
+{
+    using namespace std;
+
+    bool profile = argc >= 2 && std::string(argv[1]) == "profile";
+
+    constexpr uint32_t width = 3840;
+    constexpr uint32_t height = 2160;
+    constexpr color_space colorSpace = color_space::rec2020;
+    constexpr bool fullRange = true;
+    constexpr bool preserveRangeOvershoot = true;
+    //constexpr uint32_t countElements = 65536;
+
+    /*cudaDeviceProp prop;
+    cudaAssert(cudaSetDevice(0));
+    cudaAssert(cudaGetDeviceProperties(&prop, 0));
+    cout << "Device Name: " << prop.name << endl;
+    cout << "Device compute capability: " << prop.major << "." << prop.minor << endl;
+
+    if (profile)
+    {
+        constexpr const char* metrics[] = {
+            "smsp__sass_sectors_mem_global",
+            "smsp__sass_sectors_mem_global_ideal",
+        };
+
+        CUpti_Profiler_Initialize_Params profilerInitializeParams = {CUpti_Profiler_Initialize_Params_STRUCT_SIZE};
+        cuptiAssert(cuptiProfilerInitialize(&profilerInitializeParams));
+
+        CUpti_Profiler_DeviceSupported_Params params = {CUpti_Profiler_DeviceSupported_Params_STRUCT_SIZE};
+        params.cuDevice = 0;
+        params.api = CUPTI_PROFILER_SASS_METRICS;
+        cuptiAssert(cuptiProfilerDeviceSupported(&params));
+
+        if (params.isSupported != CUPTI_PROFILER_CONFIGURATION_SUPPORTED)
+        {
+            cerr << "Profiling not supported!" << endl;
+            return 0;
+        }
+
+        CUcontext cuCtx;
+        cuAssert(cuCtxCreate(&cuCtx, 0, 0));
+
+        CUpti_Device_GetChipName_Params getChipParams{ CUpti_Device_GetChipName_Params_STRUCT_SIZE };
+        getChipParams.deviceIndex = 0;
+        cuptiAssert(cuptiDeviceGetChipName(&getChipParams));
+
+        CUpti_SassMetrics_Config metricConfigs[size(metrics)];
+        std::map<uint64_t, std::string> metricIdToNameMap;
+        transform(begin(metrics), end(metrics), begin(metricConfigs), [&](auto&& metric){
+            CUpti_SassMetrics_GetProperties_Params sassMetricsGetPropertiesParams { CUpti_SassMetrics_GetProperties_Params_STRUCT_SIZE };
+            sassMetricsGetPropertiesParams.pChipName = getChipParams.pChipName;
+            sassMetricsGetPropertiesParams.pMetricName = metric;
+            cuptiAssert(cuptiSassMetricsGetProperties(&sassMetricsGetPropertiesParams));
+            metricIdToNameMap.insert({sassMetricsGetPropertiesParams.metric.metricId, metric});
+            return CUpti_SassMetrics_Config{
+                sassMetricsGetPropertiesParams.metric.metricId,
+                CUPTI_SASS_METRICS_OUTPUT_GRANULARITY_GPU
+            };
+        });
+
+        CUpti_SassMetricsSetConfig_Params setConfigParams { CUpti_SassMetricsSetConfig_Params_STRUCT_SIZE };
+        setConfigParams.pConfigs = data(metricConfigs);
+        setConfigParams.numOfMetricConfig = size(metricConfigs);
+        setConfigParams.deviceIndex = 0;
+        cuptiAssert(cuptiSassMetricsSetConfig(&setConfigParams));
+
+        CUpti_SassMetricsEnable_Params sassMetricsEnableParams { CUpti_SassMetricsEnable_Params_STRUCT_SIZE };
+        sassMetricsEnableParams.enableLazyPatching = true;
+        sassMetricsEnableParams.ctx = cuCtx;
+        cuptiAssert(cuptiSassMetricsEnable(&sassMetricsEnableParams));
+
+        runTests(width, height, colorSpace, fullRange, preserveRangeOvershoot, profile);
+
+        CUpti_SassMetricsGetDataProperties_Params sassMetricsGetDataPropertiesParams { CUpti_SassMetricsGetDataProperties_Params_STRUCT_SIZE };
+        sassMetricsGetDataPropertiesParams.ctx = cuCtx;
+        cuptiAssert(cuptiSassMetricsGetDataProperties(&sassMetricsGetDataPropertiesParams));
+
+        if (sassMetricsGetDataPropertiesParams.numOfInstances != 0 && sassMetricsGetDataPropertiesParams.numOfPatchedInstructionRecords != 0)
+        {
+            // 5) it is user responsibility to allocate memory for getting patched data. After call to cuptiSassGetMetricData() the records will be flushed.
+            CUpti_SassMetricsFlushData_Params sassMetricsFlushDataParams { CUpti_SassMetricsFlushData_Params_STRUCT_SIZE };
+            sassMetricsFlushDataParams.ctx = cuCtx;
+            sassMetricsFlushDataParams.numOfInstances = sassMetricsGetDataPropertiesParams.numOfInstances;
+            sassMetricsFlushDataParams.numOfPatchedInstructionRecords = sassMetricsGetDataPropertiesParams.numOfPatchedInstructionRecords;
+            sassMetricsFlushDataParams.pMetricsData = (CUpti_SassMetrics_Data*)malloc(sassMetricsGetDataPropertiesParams.numOfPatchedInstructionRecords *
+                                                                                      sizeof(CUpti_SassMetrics_Data));
+            for (size_t recordIndex = 0; recordIndex < sassMetricsGetDataPropertiesParams.numOfPatchedInstructionRecords; ++recordIndex)
+            {
+                sassMetricsFlushDataParams.pMetricsData[recordIndex].pInstanceValues = new CUpti_SassMetrics_InstanceValue[sassMetricsGetDataPropertiesParams.numOfInstances];
+            }
+            cuptiAssert(cuptiSassMetricsFlushData(&sassMetricsFlushDataParams));
+
+            printSassData(&sassMetricsFlushDataParams, metricIdToNameMap);
+
+            for (size_t recordIndex = 0; recordIndex < sassMetricsGetDataPropertiesParams.numOfPatchedInstructionRecords; ++recordIndex)
+            {
+                delete[] sassMetricsFlushDataParams.pMetricsData[recordIndex].pInstanceValues;
+            }
+        }
+
+        CUpti_SassMetricsDisable_Params sassMetricsDisableParams {CUpti_SassMetricsDisable_Params_STRUCT_SIZE};
+        sassMetricsDisableParams.ctx = cuCtx;
+        cuptiAssert(cuptiSassMetricsDisable(&sassMetricsDisableParams));
+
+        if (sassMetricsDisableParams.numOfDroppedRecords > 0)
+        {
+            cout << "Dropped records: " << sassMetricsDisableParams.numOfDroppedRecords << endl;
+        }
+
+        CUpti_SassMetricsUnsetConfig_Params unsetConfigParams{ CUpti_SassMetricsUnsetConfig_Params_STRUCT_SIZE};
+        unsetConfigParams.deviceIndex = 0;
+        cuptiAssert(cuptiSassMetricsUnsetConfig(&unsetConfigParams));
+
+        cuAssert(cuCtxDestroy(cuCtx));
+    }
+    else
+    {*/
+    runTests(width, height, colorSpace, fullRange, preserveRangeOvershoot, profile);
+    //}
 
     return 0;
 }
